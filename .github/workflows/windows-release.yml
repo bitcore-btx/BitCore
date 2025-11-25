@@ -1,0 +1,381 @@
+name: Windows Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - win32-daemon
+          - win64-daemon
+          - win32-qt
+          - win64-qt
+
+jobs:
+  build-win32-daemon:
+    name: Windows 32-bit Daemon
+    runs-on: ubuntu-20.04
+    if: github.event_name == 'push' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'win32-daemon'
+
+    env:
+      HOST: i686-w64-mingw32
+      NAME: win32-daemon
+      MAKEJOBS: -j$(nproc)
+      CCACHE_SIZE: 100M
+      CCACHE_TEMPDIR: /tmp/.ccache-temp
+      CCACHE_COMPRESS: 1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/depends/built
+            ${{ github.workspace }}/depends/sdk-sources
+          key: ${{ runner.os }}-win32-daemon-${{ hashFiles('depends/packages/*') }}
+          restore-keys: |
+            ${{ runner.os }}-win32-daemon-
+
+      - name: Install dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool autotools-dev automake pkg-config \
+            bsdmainutils curl git ca-certificates ccache \
+            g++-mingw-w64-i686 mingw-w64-i686-dev \
+            python3 nsis wine-binfmt wine32
+
+      - name: Setup ccache
+        run: |
+          mkdir -p $CCACHE_DIR
+          ccache --max-size=$CCACHE_SIZE
+
+      - name: Build dependencies
+        run: |
+          make $MAKEJOBS -C depends HOST=$HOST NO_QT=1
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure --cache-file=config.cache \
+            --disable-dependency-tracking \
+            --prefix=${{ github.workspace }}/depends/$HOST \
+            --bindir=${{ github.workspace }}/release/bin \
+            --libdir=${{ github.workspace }}/release/lib \
+            --enable-reduce-exports
+
+      - name: Build
+        run: |
+          make $MAKEJOBS
+
+      - name: Install
+        run: |
+          make install
+
+      - name: Create release package
+        run: |
+          mkdir -p release
+          cp ./src/*.exe release/ || true
+          cd release
+          zip -r bitcore-$NAME.zip ./*.exe
+          sha256sum bitcore-$NAME.zip > bitcore-$NAME.zip.sha256.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bitcore-win32-daemon
+          path: |
+            release/bitcore-win32-daemon.zip
+            release/bitcore-win32-daemon.zip.sha256.txt
+
+  build-win64-daemon:
+    name: Windows 64-bit Daemon
+    runs-on: ubuntu-20.04
+    if: github.event_name == 'push' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'win64-daemon'
+
+    env:
+      HOST: x86_64-w64-mingw32
+      NAME: win64-daemon
+      MAKEJOBS: -j$(nproc)
+      CCACHE_SIZE: 100M
+      CCACHE_TEMPDIR: /tmp/.ccache-temp
+      CCACHE_COMPRESS: 1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/depends/built
+            ${{ github.workspace }}/depends/sdk-sources
+          key: ${{ runner.os }}-win64-daemon-${{ hashFiles('depends/packages/*') }}
+          restore-keys: |
+            ${{ runner.os }}-win64-daemon-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool autotools-dev automake pkg-config \
+            bsdmainutils curl git ca-certificates ccache \
+            g++-mingw-w64-x86-64 mingw-w64-x86-64-dev \
+            python3 nsis wine-binfmt wine64
+
+      - name: Setup ccache
+        run: |
+          mkdir -p $CCACHE_DIR
+          ccache --max-size=$CCACHE_SIZE
+
+      - name: Build dependencies
+        run: |
+          make $MAKEJOBS -C depends HOST=$HOST NO_QT=1
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure --cache-file=config.cache \
+            --disable-dependency-tracking \
+            --prefix=${{ github.workspace }}/depends/$HOST \
+            --bindir=${{ github.workspace }}/release/bin \
+            --libdir=${{ github.workspace }}/release/lib \
+            --enable-reduce-exports
+
+      - name: Build
+        run: |
+          make $MAKEJOBS
+
+      - name: Install
+        run: |
+          make install
+
+      - name: Create release package
+        run: |
+          mkdir -p release
+          cp ./src/*.exe release/ || true
+          cd release
+          zip -r bitcore-$NAME.zip ./*.exe
+          sha256sum bitcore-$NAME.zip > bitcore-$NAME.zip.sha256.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bitcore-win64-daemon
+          path: |
+            release/bitcore-win64-daemon.zip
+            release/bitcore-win64-daemon.zip.sha256.txt
+
+  build-win32-qt:
+    name: Windows 32-bit QT
+    runs-on: ubuntu-20.04
+    if: github.event_name == 'push' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'win32-qt'
+
+    env:
+      HOST: i686-w64-mingw32
+      NAME: win32-qt
+      MAKEJOBS: -j$(nproc)
+      CCACHE_SIZE: 100M
+      CCACHE_TEMPDIR: /tmp/.ccache-temp
+      CCACHE_COMPRESS: 1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/depends/built
+            ${{ github.workspace }}/depends/sdk-sources
+          key: ${{ runner.os }}-win32-qt-${{ hashFiles('depends/packages/*') }}
+          restore-keys: |
+            ${{ runner.os }}-win32-qt-
+
+      - name: Install dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool autotools-dev automake pkg-config \
+            bsdmainutils curl git ca-certificates ccache \
+            g++-mingw-w64-i686 mingw-w64-i686-dev \
+            python3 nsis wine-binfmt wine32
+
+      - name: Setup ccache
+        run: |
+          mkdir -p $CCACHE_DIR
+          ccache --max-size=$CCACHE_SIZE
+
+      - name: Build dependencies
+        run: |
+          make $MAKEJOBS -C depends HOST=$HOST
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure --cache-file=config.cache \
+            --disable-dependency-tracking \
+            --prefix=${{ github.workspace }}/depends/$HOST \
+            --bindir=${{ github.workspace }}/release/bin \
+            --libdir=${{ github.workspace }}/release/lib \
+            --enable-reduce-exports
+
+      - name: Build
+        run: |
+          make $MAKEJOBS
+
+      - name: Install
+        run: |
+          make install
+
+      - name: Create release package
+        run: |
+          mkdir -p release
+          cp ./src/*.exe release/ || true
+          cp ./src/qt/*.exe release/ || true
+          cd release
+          zip -r bitcore-$NAME.zip ./*.exe
+          sha256sum bitcore-$NAME.zip > bitcore-$NAME.zip.sha256.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bitcore-win32-qt
+          path: |
+            release/bitcore-win32-qt.zip
+            release/bitcore-win32-qt.zip.sha256.txt
+
+  build-win64-qt:
+    name: Windows 64-bit QT
+    runs-on: ubuntu-20.04
+    if: github.event_name == 'push' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'win64-qt'
+
+    env:
+      HOST: x86_64-w64-mingw32
+      NAME: win64-qt
+      MAKEJOBS: -j$(nproc)
+      CCACHE_SIZE: 100M
+      CCACHE_TEMPDIR: /tmp/.ccache-temp
+      CCACHE_COMPRESS: 1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/depends/built
+            ${{ github.workspace }}/depends/sdk-sources
+          key: ${{ runner.os }}-win64-qt-${{ hashFiles('depends/packages/*') }}
+          restore-keys: |
+            ${{ runner.os }}-win64-qt-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool autotools-dev automake pkg-config \
+            bsdmainutils curl git ca-certificates ccache \
+            g++-mingw-w64-x86-64 mingw-w64-x86-64-dev \
+            python3 nsis wine-binfmt wine64
+
+      - name: Setup ccache
+        run: |
+          mkdir -p $CCACHE_DIR
+          ccache --max-size=$CCACHE_SIZE
+
+      - name: Build dependencies
+        run: |
+          make $MAKEJOBS -C depends HOST=$HOST
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure --cache-file=config.cache \
+            --disable-dependency-tracking \
+            --prefix=${{ github.workspace }}/depends/$HOST \
+            --bindir=${{ github.workspace }}/release/bin \
+            --libdir=${{ github.workspace }}/release/lib \
+            --enable-reduce-exports
+
+      - name: Build
+        run: |
+          make $MAKEJOBS
+
+      - name: Install
+        run: |
+          make install
+
+      - name: Create release package
+        run: |
+          mkdir -p release
+          cp ./src/*.exe release/ || true
+          cp ./src/qt/*.exe release/ || true
+          cd release
+          zip -r bitcore-$NAME.zip ./*.exe
+          sha256sum bitcore-$NAME.zip > bitcore-$NAME.zip.sha256.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bitcore-win64-qt
+          path: |
+            release/bitcore-win64-qt.zip
+            release/bitcore-win64-qt.zip.sha256.txt
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-win32-daemon, build-win64-daemon, build-win32-qt, build-win64-qt]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.sha256.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
