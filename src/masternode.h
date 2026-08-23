@@ -16,10 +16,17 @@ class CConnman;
 
 static const int MASTERNODE_CHECK_SECONDS               =   5;
 static const int MASTERNODE_MIN_MNB_SECONDS             =   5 * 60;
-static const int MASTERNODE_MIN_MNP_SECONDS             =  10 * 60;
-static const int MASTERNODE_EXPIRATION_SECONDS          =   4 * 60 * 60;  //BTX 2024-10 We make it a little easier to keep the mn online. old 65 * 60; 
 static const int MASTERNODE_WATCHDOG_MAX_SECONDS        = 120 * 60;
-static const int MASTERNODE_NEW_START_REQUIRED_SECONDS  =   3 * 24 * 60 * 60;  // old 180 * 60;
+
+// Regtest-only speedup: these three timers gate PRE_ENABLED -> ENABLED,
+// EXPIRED and NEW_START_REQUIRED transitions. On mainnet/testnet they keep
+// their normal values; on regtest they are drastically shortened so local
+// masternode testing doesn't require waiting many minutes/hours/days per
+// state transition. Implemented as functions (not constants) because the
+// value depends on Params(), which isn't known at header-parse time.
+int GetMasternodeMinMnpSeconds();
+int GetMasternodeExpirationSeconds();
+int GetMasternodeNewStartRequiredSeconds();
 
 static const int MASTERNODE_POSE_BAN_MAX_SCORE          = 5;
 
@@ -71,7 +78,7 @@ public:
         return ss.GetHash();
     }
 
-    bool IsExpired() const { return GetAdjustedTime() - sigTime > MASTERNODE_NEW_START_REQUIRED_SECONDS; }
+    bool IsExpired() const { return GetAdjustedTime() - sigTime > GetMasternodeNewStartRequiredSeconds(); }
 
     bool Sign(const CKey& keyMasternode, const CPubKey& pubKeyMasternode);
     bool CheckSignature(CPubKey& pubKeyMasternode, int &nDos);
@@ -158,6 +165,10 @@ public:
 
     uint256 nCollateralMinConfBlockHash{};
     int nBlockLastPaid{};
+    // Second (rank-queue) masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+    // Independent of nBlockLastPaid/nTimeLastPaid above; only ever set while that spork is active.
+    int nBlockLastPaid2{};
+    int nRankRegisteredHeight{};
     int nPoSeBanScore{};
     int nPoSeBanHeight{};
     bool fAllowMixingTx{};
@@ -190,6 +201,8 @@ public:
         READWRITE(nActiveState);
         READWRITE(nCollateralMinConfBlockHash);
         READWRITE(nBlockLastPaid);
+        READWRITE(nBlockLastPaid2);
+        READWRITE(nRankRegisteredHeight);
         READWRITE(nProtocolVersion);
         READWRITE(nPoSeBanScore);
         READWRITE(nPoSeBanHeight);
@@ -270,6 +283,9 @@ public:
     int GetLastPaidBlock() { return nBlockLastPaid; }
     void UpdateLastPaid(const CBlockIndex *pindex, int nMaxBlocksToScanBack);
 
+    int GetLastPaidBlock2() const { return nBlockLastPaid2; }
+    void SetLastPaidBlock2(int nHeight) { nBlockLastPaid2 = nHeight; }
+
     // KEEP TRACK OF EACH GOVERNANCE ITEM INCASE THIS NODE GOES OFFLINE, SO WE CAN RECALC THEIR STATUS
     void AddGovernanceVote(uint256 nGovernanceObjectHash);
     // RECALCULATE CACHED STATUS FLAGS FOR ALL AFFECTED OBJECTS
@@ -286,6 +302,8 @@ public:
         vchSig = from.vchSig;
         nCollateralMinConfBlockHash = from.nCollateralMinConfBlockHash;
         nBlockLastPaid = from.nBlockLastPaid;
+        nBlockLastPaid2 = from.nBlockLastPaid2;
+        nRankRegisteredHeight = from.nRankRegisteredHeight;
         nPoSeBanScore = from.nPoSeBanScore;
         nPoSeBanHeight = from.nPoSeBanHeight;
         fAllowMixingTx = from.fAllowMixingTx;

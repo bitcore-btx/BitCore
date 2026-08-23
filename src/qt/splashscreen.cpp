@@ -8,6 +8,10 @@
 #endif
 
 #include <qt/splashscreen.h>
+// Boost >= 1.73 no longer injects _1/_2/... into the global namespace by
+// default; pull in the namespaced placeholders explicitly instead.
+#include <boost/bind/placeholders.hpp>
+using namespace boost::placeholders;
 
 #include <qt/networkstyle.h>
 

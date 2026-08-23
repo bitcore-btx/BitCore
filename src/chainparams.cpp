@@ -392,6 +392,9 @@ class CRegTestParams : public CChainParams {
 public:
     CRegTestParams() {
         strNetworkID = "regtest";
+        // Regtest-only spork signing key so -sporkkey can be used for local
+        // testing. Matches no real key, purely a local test convenience.
+        strSporkPubKey = "0368badc9d5fdfbd983e634c65b7d316a36aa0ae353e32ff3d30fe4dfbbbcb6090";
         consensus.nSubsidyHalvingInterval = 150;
         consensus.nMinimumSubsidy = 10000.00000000 * COIN;
 

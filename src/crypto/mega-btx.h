@@ -73,6 +73,13 @@ inline uint256 Mega_Btx(const T1 pbegin, const T1 pend,uint32_t timestamp)
     arith_uint512 hash[23];
     uint32_t permutation_X[HASH_FUNC_COUNT_3 + HASH_FUNC_COUNT_2 + HASH_FUNC_COUNT_1];
             //Init1
+            // BUGFIX: index 0 was left uninitialized (stack garbage) while still being fed
+            // into std::next_permutation()'s range below, making the resulting permutation
+            // (and therefore the PoW hash) depend on Undefined Behavior / compiler/platform.
+            // Index 0 is never read by the switch() below (which starts at i=1), so fixing
+            // it to a constant only removes the non-determinism, it does not change which
+            // of the HASH_FUNC_COUNT_1-1 real branches get selected.
+            permutation_X[0] = 0;
             for (uint32_t i = 1; i < HASH_FUNC_COUNT_1; i++) {
                 permutation_X[i] = i;
             }

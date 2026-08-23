@@ -472,7 +472,10 @@ void ThreadCheckPrivateSend(CConnman& connman)
 
             // check if we should activate or ping every few minutes,
             // slightly postpone first run to give net thread a chance to connect to some peers
-            if(nTick % MASTERNODE_MIN_MNP_SECONDS == 15)
+            // (offset must stay below the divisor -- on regtest GetMasternodeMinMnpSeconds()
+            // can be as low as 10, so a fixed offset of 15 would never be reached)
+            unsigned int nMnpTick = (unsigned int)GetMasternodeMinMnpSeconds();
+            if(nTick % nMnpTick == std::min(15u, nMnpTick - 1))
                 activeMasternode.ManageState(connman);
 
             if(nTick % 60 == 0) {

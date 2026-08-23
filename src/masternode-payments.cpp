@@ -22,6 +22,7 @@
 
 /** Object for who's going to get paid on which blocks */
 CMasternodePayments mnpayments;
+CMasternodeRankPayments mnRankPayments;
 
 CCriticalSection cs_vecPayees;
 CCriticalSection cs_mapMasternodeBlocks;
@@ -81,6 +82,15 @@ bool IsBlockPayeeValid(const CTransactionRef txNew, int nBlockHeight, CAmount bl
 
     // we are still using budgets, but we have no data about them anymore,
     // we can only check masternode payments
+
+    if (sporkManager.IsSporkActive(SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM)) {
+        if (mnpayments.IsTransactionValid_2(txNew, nBlockHeight, blockReward)) {
+            LogPrint(BCLog::MNPAYMENTS, "IsBlockPayeeValid -- Valid masternode payment (rank system) at height %d: %s\n", nBlockHeight, txNew->ToString());
+            return true;
+        }
+        LogPrintf("IsBlockPayeeValid -- ERROR: Invalid masternode payment (rank system) detected at height %d: %s\n", nBlockHeight, txNew->ToString());
+        return false;
+    }
 
     if(mnpayments.IsTransactionValid(txNew, nBlockHeight)) {
         LogPrint(BCLog::MNPAYMENTS, "IsBlockPayeeValid -- Valid masternode payment at height %d: %s\n", nBlockHeight, txNew->ToString());
@@ -143,6 +153,11 @@ bool CMasternodePayments::CanVote(COutPoint outMasternode, int nBlockHeight)
 
 void CMasternodePayments::FillBlockPayee(CMutableTransaction& txNew, int nBlockHeight, CAmount blockReward, CTxOut& txoutMasternodeRet)
 {
+    if (sporkManager.IsSporkActive(SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM)) {
+        FillBlockPayee_2(txNew, nBlockHeight, blockReward, txoutMasternodeRet);
+        return;
+    }
+
     // make sure it's not filled yet
     txoutMasternodeRet = CTxOut();
 
@@ -175,6 +190,40 @@ void CMasternodePayments::FillBlockPayee(CMutableTransaction& txNew, int nBlockH
     std::string address2 = EncodeDestination(address1);
 
     LogPrintf("CMasternodePayments::FillBlockPayee -- Masternode payment %lld to %s\n", masternodePayment, address2);
+}
+
+/*
+*   Fill Masternode ONLY payment block -- second (rank-queue) payment system,
+*   see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM. Deterministic, no vote
+*   tally involved: every node computes the same expected payee independently.
+*/
+void CMasternodePayments::FillBlockPayee_2(CMutableTransaction& txNew, int nBlockHeight, CAmount blockReward, CTxOut& txoutMasternodeRet)
+{
+    // make sure it's not filled yet
+    txoutMasternodeRet = CTxOut();
+
+    int nCount = 0;
+    masternode_info_t mnInfo;
+    if (!mnodeman.GetNextMasternodeInQueueForPayment_2(nBlockHeight, nCount, mnInfo)) {
+        LogPrintf("CMasternodePayments::FillBlockPayee_2 -- Failed to detect masternode to pay\n");
+        return;
+    }
+
+    CScript payee = GetScriptForDestination(mnInfo.pubKeyCollateralAddress.GetID());
+
+    CAmount masternodePayment = GetMasternodePayment(nBlockHeight, blockReward);
+
+    // split reward between miner ...
+    txNew.vout[0].nValue -= masternodePayment;
+    // ... and masternode
+    txoutMasternodeRet = CTxOut(masternodePayment, payee);
+    txNew.vout.push_back(txoutMasternodeRet);
+
+    CTxDestination address1;
+    ExtractDestination(payee, address1);
+    std::string address2 = EncodeDestination(address1);
+
+    LogPrintf("CMasternodePayments::FillBlockPayee_2 -- Masternode payment %lld to %s\n", masternodePayment, address2);
 }
 
 int CMasternodePayments::GetMinMasternodePaymentsProto() {
@@ -566,6 +615,45 @@ bool CMasternodePayments::IsTransactionValid(const CTransactionRef txNew, int nB
     return true;
 }
 
+// Second (rank-queue) masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+// No vote tally involved: computes the deterministic queue directly and accepts the coinbase
+// payee if it matches one of the top-3 candidates (tolerance for transient, non-consensus
+// divergence in each node's locally-gossiped mapMasternodes view -- the miner itself always
+// picks rank 1 via FillBlockPayee_2, this tolerance only affects validation of others' blocks).
+bool CMasternodePayments::IsTransactionValid_2(const CTransactionRef txNew, int nBlockHeight, CAmount blockReward)
+{
+    std::vector<CMasternode*> vecQueue;
+    if (!mnodeman.GetRankQueue_2(nBlockHeight, vecQueue)) {
+        // no eligible masternode at all -- nothing to require
+        return true;
+    }
+
+    CAmount nMasternodePayment = GetMasternodePayment(nBlockHeight, blockReward);
+
+    int nChecked = 0;
+    std::string strPayeesPossible;
+    for (CMasternode* mn : vecQueue) {
+        if (nChecked >= 3) break;
+        nChecked++;
+
+        CScript payee = GetScriptForDestination(mn->pubKeyCollateralAddress.GetID());
+        for (const auto& txout : txNew->vout) {
+            if (payee == txout.scriptPubKey && nMasternodePayment == txout.nValue) {
+                LogPrint(BCLog::MNPAYMENTS, "CMasternodePayments::IsTransactionValid_2 -- Found required payment\n");
+                return true;
+            }
+        }
+
+        CTxDestination address1;
+        ExtractDestination(payee, address1);
+        std::string address2 = EncodeDestination(address1);
+        strPayeesPossible = strPayeesPossible.empty() ? address2 : strPayeesPossible + "," + address2;
+    }
+
+    LogPrintf("CMasternodePayments::IsTransactionValid_2 -- ERROR: Missing required payment, possible payees: '%s', amount: %f BTX\n", strPayeesPossible, (float)nMasternodePayment/COIN);
+    return false;
+}
+
 void CMasternodePayments::CheckAndRemove()
 {
     if(!masternodeSync.IsBlockchainSynced()) return;
@@ -616,7 +704,7 @@ bool CMasternodePaymentVote::IsValid(CNode* pnode, int nValidationHeight, std::s
 
     int nRank;
 
-    if(!mnodeman.GetMasternodeRank(vinMasternode.prevout, nRank, nBlockHeight - 101, nMinRequiredProtocol)) {
+    if(!mnodeman.GetMasternodeRank(vinMasternode.prevout, nRank, nBlockHeight - 101, nMinRequiredProtocol, true)) {
         LogPrint(BCLog::MNPAYMENTS, "CMasternodePaymentVote::IsValid -- Can't calculate rank for masternode %s\n",
                     vinMasternode.prevout.ToStringShort());
         return false;
@@ -648,6 +736,12 @@ bool CMasternodePayments::ProcessBlock(int nBlockHeight, CConnman& connman)
 
     if(fLiteMode || !fMasterNode) return false;
 
+    // Second (rank-queue) payment system active: payee selection/validation is fully
+    // deterministic, no votes needed or wanted -- stop the vote path entirely so it
+    // doesn't race/interfere with the rank system. Old vote data structures are left
+    // untouched so deactivating the spork resumes voting immediately.
+    if (sporkManager.IsSporkActive(SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM)) return false;
+
     // We have little chances to pick the right winner if winners list is out of sync
     // but we have no choice, so we'll try. However it doesn't make sense to even try to do so
     // if we have not enough data about masternodes.
@@ -655,7 +749,7 @@ bool CMasternodePayments::ProcessBlock(int nBlockHeight, CConnman& connman)
 
     int nRank;
 
-    if (!mnodeman.GetMasternodeRank(activeMasternode.outpoint, nRank, nBlockHeight - 101, GetMinMasternodePaymentsProto())) {
+    if (!mnodeman.GetMasternodeRank(activeMasternode.outpoint, nRank, nBlockHeight - 101, GetMinMasternodePaymentsProto(), true)) {
         LogPrint(BCLog::MNPAYMENTS, "CMasternodePayments::ProcessBlock -- Unknown Masternode\n");
         return false;
     }
@@ -716,7 +810,7 @@ void CMasternodePayments::CheckPreviousBlockVotes(int nPrevBlockHeight)
     debugStr += strprintf("CMasternodePayments::CheckPreviousBlockVotes -- nPrevBlockHeight=%d, expected voting MNs:\n", nPrevBlockHeight);
 
     CMasternodeMan::rank_pair_vec_t mns;
-    if (!mnodeman.GetMasternodeRanks(mns, nPrevBlockHeight - 101, GetMinMasternodePaymentsProto())) {
+    if (!mnodeman.GetMasternodeRanks(mns, nPrevBlockHeight - 101, GetMinMasternodePaymentsProto(), true)) {
         debugStr += "CMasternodePayments::CheckPreviousBlockVotes -- GetMasternodeRanks failed\n";
         LogPrint(BCLog::MNPAYMENTS, "%s\n", debugStr);
         return;
@@ -955,4 +1049,72 @@ void CMasternodePayments::UpdatedBlockTip(const CBlockIndex *pindex, CConnman& c
 
     CheckPreviousBlockVotes(nFutureBlock - 1);
     ProcessBlock(nFutureBlock, connman);
+}
+
+void CMasternodeRankPayments::RecordPayment(int nHeight, const COutPoint& outpoint)
+{
+    LOCK(cs_rankpayments);
+    mapRankBlockPayee[nHeight] = outpoint;
+    mnodeman.SetMasternodeLastPaidBlock2(outpoint, nHeight);
+    Prune(nHeight);
+}
+
+void CMasternodeRankPayments::UndoPayment(int nHeight)
+{
+    LOCK(cs_rankpayments);
+    auto it = mapRankBlockPayee.find(nHeight);
+    if (it == mapRankBlockPayee.end()) return;
+
+    COutPoint outpoint = it->second;
+    mapRankBlockPayee.erase(it);
+
+    // Restore nBlockLastPaid2 to whatever it was before this height: the most
+    // recent remaining entry for the same outpoint below nHeight, or 0 if none.
+    int nPrevHeight = 0;
+    for (const auto& entry : mapRankBlockPayee) {
+        if (entry.first < nHeight && entry.second == outpoint && entry.first > nPrevHeight) {
+            nPrevHeight = entry.first;
+        }
+    }
+    mnodeman.SetMasternodeLastPaidBlock2(outpoint, nPrevHeight);
+}
+
+int CMasternodeRankPayments::GetLastPaidHeight(const COutPoint& outpoint) const
+{
+    LOCK(cs_rankpayments);
+    int nHeightRet = 0;
+    for (const auto& entry : mapRankBlockPayee) {
+        if (entry.second == outpoint && entry.first > nHeightRet) {
+            nHeightRet = entry.first;
+        }
+    }
+    return nHeightRet;
+}
+
+void CMasternodeRankPayments::Prune(int nTipHeight)
+{
+    LOCK(cs_rankpayments);
+    int nCutoff = nTipHeight - MNRANKPAYMENTS_UNDO_DEPTH;
+    if (nCutoff <= 0) return;
+
+    auto it = mapRankBlockPayee.begin();
+    while (it != mapRankBlockPayee.end()) {
+        if (it->first < nCutoff) {
+            it = mapRankBlockPayee.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void CMasternodeRankPayments::CheckAndRemove()
+{
+    if (chainActive.Tip() == nullptr) return;
+    Prune(chainActive.Height());
+}
+
+std::string CMasternodeRankPayments::ToString() const
+{
+    LOCK(cs_rankpayments);
+    return strprintf("Rank payment history entries: %d", (int)mapRankBlockPayee.size());
 }

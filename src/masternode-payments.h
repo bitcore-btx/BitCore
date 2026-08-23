@@ -207,6 +207,11 @@ public:
     bool IsTransactionValid(const CTransactionRef txNew, int nBlockHeight);
     bool IsScheduled(CMasternode& mn, int nNotBlockHeight);
 
+    // Second (rank-queue) masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+    // Additive to the vote-based system above; only used while that spork is active.
+    void FillBlockPayee_2(CMutableTransaction& txNew, int nBlockHeight, CAmount blockReward, CTxOut& txoutMasternodeRet);
+    bool IsTransactionValid_2(const CTransactionRef txNew, int nBlockHeight, CAmount blockReward);
+
     bool CanVote(COutPoint outMasternode, int nBlockHeight);
 
     int GetMinMasternodePaymentsProto();
@@ -224,5 +229,47 @@ public:
 
     void UpdatedBlockTip(const CBlockIndex *pindex, CConnman& connman);
 };
+
+// Reorg-safe "who got paid at which height" history for the second (rank-queue)
+// masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+// Only populated while that spork is active (ConnectBlock/DisconnectBlock hooks
+// in validation.cpp are themselves gated on the spork). Kept small on purpose --
+// pruned to the last MNRANKPAYMENTS_UNDO_DEPTH blocks, far beyond any realistic reorg.
+static const int MNRANKPAYMENTS_UNDO_DEPTH = 2000;
+
+class CMasternodeRankPayments
+{
+public:
+    // height -> outpoint paid at that height under the rank system
+    std::map<int, COutPoint> mapRankBlockPayee;
+    mutable CCriticalSection cs_rankpayments;
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        LOCK(cs_rankpayments);
+        READWRITE(mapRankBlockPayee);
+    }
+
+    // Record that `outpoint` was paid at height `nHeight`, and update its
+    // masternode's nBlockLastPaid2 accordingly (if still known).
+    void RecordPayment(int nHeight, const COutPoint& outpoint);
+    // Undo the payment recorded at height `nHeight`: restore the affected
+    // masternode's nBlockLastPaid2 to its previous value (0 if none).
+    void UndoPayment(int nHeight);
+    // Most recent recorded payment height for `outpoint` still within the
+    // (pruned) history, or 0 if none is present. Used to restore a
+    // re-registering masternode's place in the rank-queue FIFO instead of
+    // treating it as never-paid.
+    int GetLastPaidHeight(const COutPoint& outpoint) const;
+    // Drop history entries older than nTipHeight - MNRANKPAYMENTS_UNDO_DEPTH.
+    void Prune(int nTipHeight);
+    void Clear() { LOCK(cs_rankpayments); mapRankBlockPayee.clear(); }
+    void CheckAndRemove();
+    std::string ToString() const;
+};
+
+extern CMasternodeRankPayments mnRankPayments;
 
 #endif // BITCORE_MASTERNODE-PAYMENTS_H

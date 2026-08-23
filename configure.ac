@@ -1,9 +1,9 @@
 dnl require autoconf 2.60 (AS_ECHO/AS_ECHO_N)
 AC_PREREQ([2.60])
 define(_CLIENT_VERSION_MAJOR, 0)
-define(_CLIENT_VERSION_MINOR, 91)
+define(_CLIENT_VERSION_MINOR, 92)
 define(_CLIENT_VERSION_REVISION, 1)
-define(_CLIENT_VERSION_BUILD, 1)
+define(_CLIENT_VERSION_BUILD, 0)
 define(_CLIENT_VERSION_IS_RELEASE, true)
 define(_COPYRIGHT_YEAR, 2024)
 define(_COPYRIGHT_HOLDERS,[The %s developers])
@@ -961,7 +961,13 @@ fi
 
 if test x$use_boost = xyes; then
 
-BOOST_LIBS="$BOOST_LDFLAGS $BOOST_SYSTEM_LIB $BOOST_FILESYSTEM_LIB $BOOST_THREAD_LIB $BOOST_CHRONO_LIB"
+dnl Order matters for static linking: boost_thread and boost_chrono call
+dnl into boost_system (e.g. boost::system::system_category()), so
+dnl boost_system must come after them on the link line, or a single-pass
+dnl static linker (as used for --disable-shared builds) leaves those
+dnl symbols unresolved. Dynamic linking doesn't care about this order,
+dnl so this only matters for static/portable builds.
+BOOST_LIBS="$BOOST_LDFLAGS $BOOST_FILESYSTEM_LIB $BOOST_THREAD_LIB $BOOST_CHRONO_LIB $BOOST_SYSTEM_LIB"
 
 
 dnl If boost (prior to 1.57) was built without c++11, it emulated scoped enums

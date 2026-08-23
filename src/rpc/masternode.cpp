@@ -28,6 +28,7 @@
 #include <univalue.h>
 
 UniValue masternodelist(const JSONRPCRequest& request);
+UniValue getmasternoderank_2(const JSONRPCRequest& request);
 
 #ifdef ENABLE_WALLET
 void EnsureWalletIsUnlocked();
@@ -897,6 +898,52 @@ UniValue sentinelping(const JSONRPCRequest& request)
     return true;
 }
 
+// Second (rank-queue) masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+// Pure debug/preview RPC: shows the current ordering of the new deterministic payment queue,
+// regardless of whether the spork is active. No side effects -- uses the exact same
+// CMasternodeMan::GetRankQueue_2() algorithm as production payee selection, so this is never
+// a re-implementation that could drift from what actually gets paid once the spork is active.
+UniValue getmasternoderank_2(const JSONRPCRequest& request)
+{
+    if (request.fHelp || request.params.size() > 0)
+        throw std::runtime_error(
+            "getmasternoderank_2\n"
+            "\nReturns the current ordering of the second (rank-queue) masternode payment\n"
+            "system, for debugging/preview purposes. Works regardless of whether\n"
+            "SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM is active, and has no side effects.\n"
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"rank\": n,                 (numeric) position in the queue, 1 = paid next\n"
+            "    \"outpoint\": \"txid-n\",      (string) masternode collateral outpoint\n"
+            "    \"payee\": \"address\",        (string) masternode payout address\n"
+            "    \"lastpaidblock2\": n,       (numeric) height last paid under this system, 0 = never\n"
+            "    \"registeredheight\": n      (numeric) FIFO tie-break height for never-paid masternodes\n"
+            "  }\n"
+            "  ,...\n"
+            "]\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getmasternoderank_2", "")
+            + HelpExampleRpc("getmasternoderank_2", "")
+        );
+
+    std::vector<CMasternode*> vecQueue;
+    mnodeman.GetRankQueue_2(chainActive.Height(), vecQueue);
+
+    UniValue result(UniValue::VARR);
+    int nRank = 1;
+    for (CMasternode* mn : vecQueue) {
+        UniValue obj(UniValue::VOBJ);
+        obj.push_back(Pair("rank", nRank++));
+        obj.push_back(Pair("outpoint", mn->vin.prevout.ToStringShort()));
+        obj.push_back(Pair("payee", EncodeDestination(mn->pubKeyCollateralAddress.GetID())));
+        obj.push_back(Pair("lastpaidblock2", mn->GetLastPaidBlock2()));
+        obj.push_back(Pair("registeredheight", mn->nRankRegisteredHeight));
+        result.push_back(obj);
+    }
+    return result;
+}
+
 // Dash
 static const CRPCCommand commands[] =
 { //  category              name                      actor (function)         argNames
@@ -904,6 +951,7 @@ static const CRPCCommand commands[] =
     { "dash",               "masternode",             &masternode,             {"command"}  },
     { "dash",               "masternodelist",         &masternodelist,         {"mode", "filter"}  },
     { "dash",               "masternodebroadcast",    &masternodebroadcast,    {"command"}  },
+    { "dash",               "getmasternoderank_2",    &getmasternoderank_2,    {}  },
     { "dash",               "getpoolinfo",            &getpoolinfo,            {}  },
     { "dash",               "sentinelping",           &sentinelping,           {"version"}  },
 #ifdef ENABLE_WALLET

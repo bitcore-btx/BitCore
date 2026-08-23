@@ -15,10 +15,16 @@
 #include <validation.h>
 
 #include <list>
+#include <map>
+#include <vector>
 #include <atomic>
 #include <future>
 
 #include <boost/signals2/signal.hpp>
+// Boost >= 1.73 no longer injects _1/_2/... into the global namespace by
+// default; pull in the namespaced placeholders explicitly instead.
+#include <boost/bind/placeholders.hpp>
+using namespace boost::placeholders;
 
 struct MainSignalsInstance {
     // Dash
@@ -51,6 +57,14 @@ struct MainSignalsInstance {
     // our own queue here :(
     SingleThreadedSchedulerClient m_schedulerClient;
 
+    // Boost >= 1.74 changed boost::function's internal storage for
+    // boost::bind(...)-built slots, which breaks signals2's disconnect-by-value
+    // (it needs to compare the stored slot against a freshly built one). Track
+    // the connection handles returned by connect() instead and disconnect
+    // through those, avoiding the comparison entirely.
+    std::map<CValidationInterface*, std::vector<boost::signals2::connection>> m_connMainSignals;
+    boost::signals2::connection m_connMempoolNotifyEntryRemoved;
+
     explicit MainSignalsInstance(CScheduler *pscheduler) : m_schedulerClient(pscheduler) {}
 };
 
@@ -77,11 +91,11 @@ size_t CMainSignals::CallbacksPending() {
 }
 
 void CMainSignals::RegisterWithMempoolSignals(CTxMemPool& pool) {
-    pool.NotifyEntryRemoved.connect(boost::bind(&CMainSignals::MempoolEntryRemoved, this, _1, _2));
+    m_internals->m_connMempoolNotifyEntryRemoved = pool.NotifyEntryRemoved.connect(boost::bind(&CMainSignals::MempoolEntryRemoved, this, _1, _2));
 }
 
 void CMainSignals::UnregisterWithMempoolSignals(CTxMemPool& pool) {
-    pool.NotifyEntryRemoved.disconnect(boost::bind(&CMainSignals::MempoolEntryRemoved, this, _1, _2));
+    m_internals->m_connMempoolNotifyEntryRemoved.disconnect();
 }
 
 CMainSignals& GetMainSignals()
@@ -90,88 +104,55 @@ CMainSignals& GetMainSignals()
 }
 
 void RegisterValidationInterface(CValidationInterface* pwalletIn) {
-    // Dash
-    g_signals.m_internals->AcceptedBlockHeader.connect(boost::bind(&CValidationInterface::AcceptedBlockHeader, pwalletIn, _1));
-    g_signals.m_internals->NotifyHeaderTip.connect(boost::bind(&CValidationInterface::NotifyHeaderTip, pwalletIn, _1, _2));
-    //
-
-    g_signals.m_internals->UpdatedBlockTip.connect(boost::bind(&CValidationInterface::UpdatedBlockTip, pwalletIn, _1, _2, _3));
+    std::vector<boost::signals2::connection>& conns = g_signals.m_internals->m_connMainSignals[pwalletIn];
 
     // Dash
-    g_signals.m_internals->SyncTransaction.connect(boost::bind(&CValidationInterface::SyncTransaction, pwalletIn, _1, _2));
+    conns.push_back(g_signals.m_internals->AcceptedBlockHeader.connect(boost::bind(&CValidationInterface::AcceptedBlockHeader, pwalletIn, _1)));
+    conns.push_back(g_signals.m_internals->NotifyHeaderTip.connect(boost::bind(&CValidationInterface::NotifyHeaderTip, pwalletIn, _1, _2)));
     //
 
-    g_signals.m_internals->TransactionAddedToMempool.connect(boost::bind(&CValidationInterface::TransactionAddedToMempool, pwalletIn, _1));
-    g_signals.m_internals->BlockConnected.connect(boost::bind(&CValidationInterface::BlockConnected, pwalletIn, _1, _2, _3));
-    g_signals.m_internals->BlockDisconnected.connect(boost::bind(&CValidationInterface::BlockDisconnected, pwalletIn, _1));
-    g_signals.m_internals->TransactionRemovedFromMempool.connect(boost::bind(&CValidationInterface::TransactionRemovedFromMempool, pwalletIn, _1));
+    conns.push_back(g_signals.m_internals->UpdatedBlockTip.connect(boost::bind(&CValidationInterface::UpdatedBlockTip, pwalletIn, _1, _2, _3)));
 
     // Dash
-    g_signals.m_internals->NotifyTransactionLock.connect(boost::bind(&CValidationInterface::NotifyTransactionLock, pwalletIn, _1));
+    conns.push_back(g_signals.m_internals->SyncTransaction.connect(boost::bind(&CValidationInterface::SyncTransaction, pwalletIn, _1, _2)));
     //
 
-    g_signals.m_internals->ChainStateFlushed.connect(boost::bind(&CValidationInterface::ChainStateFlushed, pwalletIn, _1));
-    g_signals.m_internals->Broadcast.connect(boost::bind(&CValidationInterface::ResendWalletTransactions, pwalletIn, _1, _2));
-    g_signals.m_internals->BlockChecked.connect(boost::bind(&CValidationInterface::BlockChecked, pwalletIn, _1, _2));
-    g_signals.m_internals->NewPoWValidBlock.connect(boost::bind(&CValidationInterface::NewPoWValidBlock, pwalletIn, _1, _2));
+    conns.push_back(g_signals.m_internals->TransactionAddedToMempool.connect(boost::bind(&CValidationInterface::TransactionAddedToMempool, pwalletIn, _1)));
+    conns.push_back(g_signals.m_internals->BlockConnected.connect(boost::bind(&CValidationInterface::BlockConnected, pwalletIn, _1, _2, _3)));
+    conns.push_back(g_signals.m_internals->BlockDisconnected.connect(boost::bind(&CValidationInterface::BlockDisconnected, pwalletIn, _1)));
+    conns.push_back(g_signals.m_internals->TransactionRemovedFromMempool.connect(boost::bind(&CValidationInterface::TransactionRemovedFromMempool, pwalletIn, _1)));
+
+    // Dash
+    conns.push_back(g_signals.m_internals->NotifyTransactionLock.connect(boost::bind(&CValidationInterface::NotifyTransactionLock, pwalletIn, _1)));
+    //
+
+    conns.push_back(g_signals.m_internals->ChainStateFlushed.connect(boost::bind(&CValidationInterface::ChainStateFlushed, pwalletIn, _1)));
+    conns.push_back(g_signals.m_internals->Broadcast.connect(boost::bind(&CValidationInterface::ResendWalletTransactions, pwalletIn, _1, _2)));
+    conns.push_back(g_signals.m_internals->BlockChecked.connect(boost::bind(&CValidationInterface::BlockChecked, pwalletIn, _1, _2)));
+    conns.push_back(g_signals.m_internals->NewPoWValidBlock.connect(boost::bind(&CValidationInterface::NewPoWValidBlock, pwalletIn, _1, _2)));
 }
 
 void UnregisterValidationInterface(CValidationInterface* pwalletIn) {
-    g_signals.m_internals->BlockChecked.disconnect(boost::bind(&CValidationInterface::BlockChecked, pwalletIn, _1, _2));
-    g_signals.m_internals->Broadcast.disconnect(boost::bind(&CValidationInterface::ResendWalletTransactions, pwalletIn, _1, _2));
-
-    // Dash
-    g_signals.m_internals->NotifyTransactionLock.disconnect(boost::bind(&CValidationInterface::NotifyTransactionLock, pwalletIn, _1));
-    //
-
-    g_signals.m_internals->ChainStateFlushed.disconnect(boost::bind(&CValidationInterface::ChainStateFlushed, pwalletIn, _1));
-    g_signals.m_internals->TransactionAddedToMempool.disconnect(boost::bind(&CValidationInterface::TransactionAddedToMempool, pwalletIn, _1));
-    g_signals.m_internals->BlockConnected.disconnect(boost::bind(&CValidationInterface::BlockConnected, pwalletIn, _1, _2, _3));
-    g_signals.m_internals->BlockDisconnected.disconnect(boost::bind(&CValidationInterface::BlockDisconnected, pwalletIn, _1));
-    g_signals.m_internals->TransactionRemovedFromMempool.disconnect(boost::bind(&CValidationInterface::TransactionRemovedFromMempool, pwalletIn, _1));
-    g_signals.m_internals->UpdatedBlockTip.disconnect(boost::bind(&CValidationInterface::UpdatedBlockTip, pwalletIn, _1, _2, _3));
-
-    // Dash
-    g_signals.m_internals->SyncTransaction.disconnect(boost::bind(&CValidationInterface::SyncTransaction, pwalletIn, _1, _2));
-    //
-
-    // Dash
-    g_signals.m_internals->NotifyHeaderTip.disconnect(boost::bind(&CValidationInterface::NotifyHeaderTip, pwalletIn, _1, _2));
-    g_signals.m_internals->AcceptedBlockHeader.disconnect(boost::bind(&CValidationInterface::AcceptedBlockHeader, pwalletIn, _1));
-    //
-
-    g_signals.m_internals->NewPoWValidBlock.disconnect(boost::bind(&CValidationInterface::NewPoWValidBlock, pwalletIn, _1, _2));
+    auto it = g_signals.m_internals->m_connMainSignals.find(pwalletIn);
+    if (it == g_signals.m_internals->m_connMainSignals.end()) {
+        return;
+    }
+    for (boost::signals2::connection& conn : it->second) {
+        conn.disconnect();
+    }
+    g_signals.m_internals->m_connMainSignals.erase(it);
 }
 
 void UnregisterAllValidationInterfaces() {
     if (!g_signals.m_internals) {
         return;
     }
-    g_signals.m_internals->BlockChecked.disconnect_all_slots();
-    g_signals.m_internals->Broadcast.disconnect_all_slots();
-
-    // Dash
-    g_signals.m_internals->NotifyTransactionLock.disconnect_all_slots();
-    //
-
-    g_signals.m_internals->ChainStateFlushed.disconnect_all_slots();
-    g_signals.m_internals->TransactionAddedToMempool.disconnect_all_slots();
-    g_signals.m_internals->BlockConnected.disconnect_all_slots();
-    g_signals.m_internals->BlockDisconnected.disconnect_all_slots();
-    g_signals.m_internals->TransactionRemovedFromMempool.disconnect_all_slots();
-
-    // Dash
-    g_signals.m_internals->SyncTransaction.disconnect_all_slots();
-    //
-
-    g_signals.m_internals->UpdatedBlockTip.disconnect_all_slots();
-
-    // Dash
-    g_signals.m_internals->NotifyHeaderTip.disconnect_all_slots();
-    g_signals.m_internals->AcceptedBlockHeader.disconnect_all_slots();
-    //
-
-    g_signals.m_internals->NewPoWValidBlock.disconnect_all_slots();
+    for (auto& item : g_signals.m_internals->m_connMainSignals) {
+        for (boost::signals2::connection& conn : item.second) {
+            conn.disconnect();
+        }
+    }
+    g_signals.m_internals->m_connMainSignals.clear();
 }
 
 void CallFunctionInValidationInterfaceQueue(std::function<void ()> func) {

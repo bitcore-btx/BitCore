@@ -54,6 +54,10 @@
 
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/thread.hpp>
+// Boost >= 1.73 no longer injects _1/_2/... into the global namespace by
+// default; pull in the namespaced placeholders explicitly instead.
+#include <boost/bind/placeholders.hpp>
+using namespace boost::placeholders;
 
 #if defined(NDEBUG)
 # error "BitCore cannot be compiled without assertions."
@@ -1733,6 +1737,12 @@ DisconnectResult CChainState::DisconnectBlock(const CBlock& block, const CBlockI
 {
     bool fClean = true;
 
+    // Second (rank-queue) masternode payment system: undo the payment tracking recorded in
+    // ConnectBlock for this height, symmetric with the record there. Safe to call unconditionally
+    // even if nothing was recorded for this height (e.g. spork wasn't active back then) or if the
+    // spork has since been deactivated -- UndoPayment() is a no-op when there's no entry to undo.
+    mnRankPayments.UndoPayment(pindex->nHeight);
+
     CBlockUndo blockUndo;
     if (!UndoReadFromDisk(blockUndo, pindex)) {
         error("DisconnectBlock(): failure reading undo data");
@@ -2295,6 +2305,28 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
     int64_t nTime6 = GetTimeMicros(); nTimeCallbacks += nTime6 - nTime5;
     LogPrint(BCLog::BENCH, "    - Callbacks: %.2fms [%.2fs (%.2fms/blk)]\n", MILLI * (nTime6 - nTime5), nTimeCallbacks * MICRO, nTimeCallbacks * MILLI / nBlocksTotal);
 
+    // Second (rank-queue) masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+    // Only tracked while the spork is active -- record which masternode actually got paid at this
+    // height so nBlockLastPaid2/getmasternoderank_2 reflect it (reorg-undone in DisconnectBlock).
+    // Placed here deliberately, after fJustCheck's early-return and after WriteUndoDataForBlock
+    // has succeeded: this is the true point of no return for this block, so RecordPayment only
+    // ever fires for blocks that are actually becoming part of the active chain. Placing it earlier
+    // (e.g. right after IsBlockPayeeValid) would also fire on dry-run validity checks (fJustCheck,
+    // used e.g. by block-template testing) and on ConnectBlock attempts that still fail a later
+    // check such as control.Wait() -- both of which never actually connect the block, so any
+    // mutation done there has no corresponding DisconnectBlock to undo it and leaks stale state.
+    if (sporkManager.IsSporkActive(SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM)) {
+        CAmount nMasternodePaymentAmt = GetMasternodePayment(pindex->nHeight, block.vtx[0]->GetValueOut());
+        for (const auto& txout : block.vtx[0]->vout) {
+            if (txout.nValue != nMasternodePaymentAmt) continue;
+            masternode_info_t mnInfo;
+            if (mnodeman.GetMasternodeInfo(txout.scriptPubKey, mnInfo)) {
+                mnRankPayments.RecordPayment(pindex->nHeight, mnInfo.vin.prevout);
+                break;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -2592,14 +2624,19 @@ class ConnectTrace {
 private:
     std::vector<PerBlockConnectTrace> blocksConnected;
     CTxMemPool &pool;
+    // Store the connection handle rather than disconnecting by value: Boost's
+    // disconnect-by-value needs to compare the stored slot against a freshly
+    // built boost::bind(...), which is no longer reliable with newer Boost
+    // versions' internal boost::function storage for such comparisons.
+    boost::signals2::connection m_connNotifyEntryRemoved;
 
 public:
     explicit ConnectTrace(CTxMemPool &_pool) : blocksConnected(1), pool(_pool) {
-        pool.NotifyEntryRemoved.connect(boost::bind(&ConnectTrace::NotifyEntryRemoved, this, _1, _2));
+        m_connNotifyEntryRemoved = pool.NotifyEntryRemoved.connect(boost::bind(&ConnectTrace::NotifyEntryRemoved, this, _1, _2));
     }
 
     ~ConnectTrace() {
-        pool.NotifyEntryRemoved.disconnect(boost::bind(&ConnectTrace::NotifyEntryRemoved, this, _1, _2));
+        m_connNotifyEntryRemoved.disconnect();
     }
 
     void BlockConnected(CBlockIndex* pindex, std::shared_ptr<const CBlock> pblock) {
