@@ -17,6 +17,10 @@
 #include <utilstrencodings.h>
 
 #include <boost/bind.hpp>
+// Boost >= 1.73 no longer injects _1/_2/... into the global namespace by
+// default; pull in the namespaced placeholders explicitly instead.
+#include <boost/bind/placeholders.hpp>
+using namespace boost::placeholders;
 #include <boost/signals2/signal.hpp>
 #include <boost/algorithm/string/case_conv.hpp> // for to_upper()
 #include <boost/algorithm/string/classification.hpp>

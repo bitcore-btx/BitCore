@@ -15,6 +15,8 @@
 #include <ui_interface.h>
 
 #include <memory>
+#include <deque>
+#include <queue>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

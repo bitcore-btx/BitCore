@@ -79,7 +79,7 @@ private:
     /// Find an entry
     CMasternode* Find(const COutPoint& outpoint);
 
-    bool GetMasternodeScores(const uint256& nBlockHash, score_pair_vec_t& vecMasternodeScoresRet, int nMinProtocol = 0);
+    bool GetMasternodeScores(const uint256& nBlockHash, score_pair_vec_t& vecMasternodeScoresRet, int nMinProtocol = 0, bool fFilterValidForPayment = false);
 
 public:
     // Keep track of all broadcasts I've seen
@@ -171,13 +171,24 @@ public:
     /// Same as above but use current block height
     bool GetNextMasternodeInQueueForPayment(bool fFilterSigTime, int& nCountRet, masternode_info_t& mnInfoRet);
 
+    /// Second (rank-queue) masternode payment system, see SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM.
+    /// Builds the full, deterministically-sorted eligible-masternode queue (ascending by
+    /// nBlockLastPaid2, never-paid masternodes ordered by nRankRegisteredHeight, outpoint as
+    /// final tie-break). Used both by production payee selection and by the getmasternoderank_2
+    /// debug RPC, so both share the exact same algorithm.
+    bool GetRankQueue_2(int nBlockHeight, std::vector<CMasternode*>& vecOut);
+    /// Find the masternode next to be paid under the second (rank-queue) payment system.
+    bool GetNextMasternodeInQueueForPayment_2(int nBlockHeight, int& nCountRet, masternode_info_t& mnInfoRet);
+    /// Set a masternode's nBlockLastPaid2 (used by CMasternodeRankPayments on connect/disconnect).
+    bool SetMasternodeLastPaidBlock2(const COutPoint& outpoint, int nHeight);
+
     /// Find a random entry
     masternode_info_t FindRandomNotInVec(const std::vector<COutPoint> &vecToExclude, int nProtocolVersion = -1);
 
     std::map<COutPoint, CMasternode> GetFullMasternodeMap() { return mapMasternodes; }
 
-    bool GetMasternodeRanks(rank_pair_vec_t& vecMasternodeRanksRet, int nBlockHeight = -1, int nMinProtocol = 0);
-    bool GetMasternodeRank(const COutPoint &outpoint, int& nRankRet, int nBlockHeight = -1, int nMinProtocol = 0);
+    bool GetMasternodeRanks(rank_pair_vec_t& vecMasternodeRanksRet, int nBlockHeight = -1, int nMinProtocol = 0, bool fFilterValidForPayment = false);
+    bool GetMasternodeRank(const COutPoint &outpoint, int& nRankRet, int nBlockHeight = -1, int nMinProtocol = 0, bool fFilterValidForPayment = false);
 
     void ProcessMasternodeConnections(CConnman& connman);
     std::pair<CService, std::set<uint256> > PopScheduledMnbRequestConnection();
