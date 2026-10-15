@@ -23,6 +23,21 @@
 
 #include <boost/lexical_cast.hpp>
 
+int GetMasternodeMinMnpSeconds()
+{
+    return Params().NetworkIDString() == CBaseChainParams::REGTEST ? 10 : 10 * 60;
+}
+
+int GetMasternodeExpirationSeconds()
+{
+    return Params().NetworkIDString() == CBaseChainParams::REGTEST ? 40 : 4 * 60 * 60;
+}
+
+int GetMasternodeNewStartRequiredSeconds()
+{
+    return Params().NetworkIDString() == CBaseChainParams::REGTEST ? 30 : 3 * 24 * 60 * 60;
+}
+
 
 CMasternode::CMasternode() :
     masternode_info_t{ MASTERNODE_ENABLED, PROTOCOL_VERSION, GetAdjustedTime()},
@@ -41,6 +56,8 @@ CMasternode::CMasternode(const CMasternode& other) :
     vchSig(other.vchSig),
     nCollateralMinConfBlockHash(other.nCollateralMinConfBlockHash),
     nBlockLastPaid(other.nBlockLastPaid),
+    nBlockLastPaid2(other.nBlockLastPaid2),
+    nRankRegisteredHeight(other.nRankRegisteredHeight),
     nPoSeBanScore(other.nPoSeBanScore),
     nPoSeBanHeight(other.nPoSeBanHeight),
     fAllowMixingTx(other.fAllowMixingTx),
@@ -219,7 +236,7 @@ void CMasternode::Check(bool fForce)
     }
 
     // keep old masternodes on start, give them a chance to receive updates...
-    bool fWaitForPing = !masternodeSync.IsMasternodeListSynced() && !IsPingedWithin(MASTERNODE_MIN_MNP_SECONDS);
+    bool fWaitForPing = !masternodeSync.IsMasternodeListSynced() && !IsPingedWithin(GetMasternodeMinMnpSeconds());
 
     if(fWaitForPing && !fOurMasternode) {
         // ...but if it was already expired before the initial check - return right away
@@ -232,7 +249,7 @@ void CMasternode::Check(bool fForce)
     // don't expire if we are still in "waiting for ping" mode unless it's our own masternode
     if(!fWaitForPing || fOurMasternode) {
 
-        if(!IsPingedWithin(MASTERNODE_NEW_START_REQUIRED_SECONDS)) {
+        if(!IsPingedWithin(GetMasternodeNewStartRequiredSeconds())) {
             nActiveState = MASTERNODE_NEW_START_REQUIRED;
             if(nActiveStatePrev != nActiveState) {
                 LogPrint(BCLog::MASTERNODE, "CMasternode::Check -- Masternode %s is in %s state now\n", vin.prevout.ToStringShort(), GetStateString());
@@ -240,7 +257,7 @@ void CMasternode::Check(bool fForce)
             return;
         }
 
-        if(!IsPingedWithin(MASTERNODE_EXPIRATION_SECONDS)) {
+        if(!IsPingedWithin(GetMasternodeExpirationSeconds())) {
             nActiveState = MASTERNODE_EXPIRED;
             if(nActiveStatePrev != nActiveState) {
                 LogPrint(BCLog::MASTERNODE, "CMasternode::Check -- Masternode %s is in %s state now\n", vin.prevout.ToStringShort(), GetStateString());
@@ -249,7 +266,7 @@ void CMasternode::Check(bool fForce)
         }
     }
 
-    if(lastPing.sigTime - sigTime < MASTERNODE_MIN_MNP_SECONDS) {
+    if(lastPing.sigTime - sigTime < GetMasternodeMinMnpSeconds()) {
         nActiveState = MASTERNODE_PRE_ENABLED;
         if(nActiveStatePrev != nActiveState) {
             LogPrint(BCLog::MASTERNODE, "CMasternode::Check -- Masternode %s is in %s state now\n", vin.prevout.ToStringShort(), GetStateString());
@@ -598,7 +615,12 @@ bool CMasternodeBroadcast::CheckOutpoint(int& nDos)
             return false;
         }
         // remember the hash of the block where masternode collateral had minimum required confirmations
-        nCollateralMinConfBlockHash = chainActive[nHeight + Params().GetConsensus().nMasternodeMinimumConfirmations - 1]->GetBlockHash();
+        int nRegHeight = nHeight + Params().GetConsensus().nMasternodeMinimumConfirmations - 1;
+        nCollateralMinConfBlockHash = chainActive[nRegHeight]->GetBlockHash();
+        // Registration height for the second (rank-queue) payment system's FIFO tie-break
+        // (SPORK_BTX_22_MASTERNODE_RANK_PAYMENT_SYSTEM) -- derived purely from chain data,
+        // same as nCollateralMinConfBlockHash above, so it's consensus-safe.
+        nRankRegisteredHeight = nRegHeight;
     }
 
     LogPrint(BCLog::MASTERNODE, "CMasternodeBroadcast::CheckOutpoint -- Masternode UTXO verified\n");
@@ -795,7 +817,13 @@ bool CMasternodePing::CheckAndUpdate(CMasternode* pmn, bool fFromNewBroadcast, i
         LOCK(cs_main);
         BlockMap::iterator mi = mapBlockIndex.find(blockHash);
         // BTX 2024-10
-        if ((*mi).second && (*mi).second->nHeight < chainActive.Height() - (MASTERNODE_NEW_START_REQUIRED_SECONDS / Params().GetConsensus().nPowTargetSpacing)) {
+        // Guard against integer division rounding to 0 when the shortened
+        // regtest NewStartRequired window is smaller than the target spacing.
+        // Floor must exceed the fixed tip-12 block reference used in
+        // CMasternodePing::CMasternodePing() above, or every ping on regtest
+        // would be rejected as "too old" by construction.
+        int nBlockSlack = std::max(13, GetMasternodeNewStartRequiredSeconds() / (int)Params().GetConsensus().nPowTargetSpacing);
+        if ((*mi).second && (*mi).second->nHeight < chainActive.Height() - nBlockSlack) {
         //if ((*mi).second && (*mi).second->nHeight < chainActive.Height() - 24) {             
             //LogPrintf("CMasternodePing::CheckAndUpdate -- Masternode ping is invalid, block hash is too old: masternode=%s  blockHash=%s\n", vin.prevout.ToStringShort(), blockHash.ToString());
             LogPrint(BCLog::MASTERNODE, "CMasternodePing::CheckAndUpdate -- Masternode ping is invalid, block hash is too old: masternode=%s  blockHash=%s\n", vin.prevout.ToStringShort(), blockHash.ToString());
@@ -810,8 +838,8 @@ bool CMasternodePing::CheckAndUpdate(CMasternode* pmn, bool fFromNewBroadcast, i
 
     // LogPrintf("mnping - Found corresponding mn for vin: %s\n", vin.prevout.ToStringShort());
     // update only if there is no known ping for this masternode or
-    // last ping was more then MASTERNODE_MIN_MNP_SECONDS-60 ago comparing to this one
-    if (pmn->IsPingedWithin(MASTERNODE_MIN_MNP_SECONDS - 60, sigTime)) {
+    // last ping was more then GetMasternodeMinMnpSeconds()-60 ago comparing to this one
+    if (pmn->IsPingedWithin(GetMasternodeMinMnpSeconds() - 60, sigTime)) {
         LogPrint(BCLog::MASTERNODE, "CMasternodePing::CheckAndUpdate -- Masternode ping arrived too early, masternode=%s\n", vin.prevout.ToStringShort());
         //nDos = 1; //disable, this is happening frequently and causing banned peers
         return false;
@@ -822,8 +850,8 @@ bool CMasternodePing::CheckAndUpdate(CMasternode* pmn, bool fFromNewBroadcast, i
     // so, ping seems to be ok
 
     // if we are still syncing and there was no known ping for this mn for quite a while
-    // (NOTE: assuming that MASTERNODE_EXPIRATION_SECONDS/2 should be enough to finish mn list sync)
-    if(!masternodeSync.IsMasternodeListSynced() && !pmn->IsPingedWithin(MASTERNODE_EXPIRATION_SECONDS/2)) {
+    // (NOTE: assuming that GetMasternodeExpirationSeconds()/2 should be enough to finish mn list sync)
+    if(!masternodeSync.IsMasternodeListSynced() && !pmn->IsPingedWithin(GetMasternodeExpirationSeconds()/2)) {
         // let's bump sync timeout
         LogPrint(BCLog::MASTERNODE, "CMasternodePing::CheckAndUpdate -- bumping sync timeout, masternode=%s\n", vin.prevout.ToStringShort());
         masternodeSync.BumpAssetLastTime("CMasternodePing::CheckAndUpdate");

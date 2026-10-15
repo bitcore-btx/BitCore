@@ -5,8 +5,6 @@ Welcome to BitCore BTX
 
 [ Release Notes ](https://www.reddit.com/r/bitcore_btx/comments/fsbzog/odarhom_release_notes_short_overview_first_draft/) - [ FAQ ](https://www.reddit.com/r/bitcore_btx/wiki/index/odarhom_faq) - [ Website ](https://www.bitcore.cc) - [ BitcoinTalk ](https://bitcointalk.org/index.php?topic=1883902.0)
 
-[![Build Status](https://travis-ci.com/bitcore-btx/BitCore.svg?branch=master)](https://travis-ci.com/bitcore-btx/BitCore)
-
 What is BitCore?
 ----------------
 
@@ -21,7 +19,6 @@ BitCore BTX preserves and implements Bitcoin features such as SegWit, which enab
 - 220 Byte Datacarriersize (OP_RETURN)
 - Hashalgorithm MagaBTX ( a unique solution for Bitcore)
 - Bitcore Diffshield
-- Travis CI support
 
 For more information, as well as an immediately useable, binary version of
 the BitCore software, see [https://bitcore.cc](https://bitcore.cc).
@@ -61,8 +58,6 @@ and extending unit tests can be found in [/src/test/README.md](/src/test/README.
 There are also [regression and integration tests](/test), written
 in Python, that are run automatically on the build server.
 These tests can be run (if the [test dependencies](/test) are installed) with: `test/functional/test_runner.py`
-
-The Travis CI system makes sure that every pull request is built for Windows, Linux, and OS X, and that unit/sanity tests are run automatically.
 
 License
 -------
