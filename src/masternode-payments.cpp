@@ -458,7 +458,7 @@ bool CMasternodeBlockPayees::IsTransactionValid(const CTransactionRef txNew)
 
      for (auto& payee : vecPayees) 
         {
-            if (payee.GetVoteCount() >= MNPAYMENTS_SIGNATURES_REQUIRED/3 && SPORK_BTX_23_MASTERNODE_PAYMENT_LOW_VOTING)
+            if (payee.GetVoteCount() >= MNPAYMENTS_SIGNATURES_REQUIRED/3 && sporkManager.IsSporkActive(SPORK_BTX_23_MASTERNODE_PAYMENT_LOW_VOTING))
             {
                 for (auto txout : txNew->vout) 
                     {
