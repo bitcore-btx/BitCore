@@ -5,7 +5,9 @@ $(package)_file_name=release-$($(package)_version).tar.gz
 $(package)_sha256_hash=316ddb401745ac5d222d7c529ef1eada12f58f6376a66c1118eee803cb70f83d
 
 define $(package)_preprocess_cmds
-  sed -i 's/#define _WIN32_WINNT 0x0501/#define _WIN32_WINNT 0x0601/' evutil.c && ./autogen.sh
+  sed -i 's/#define _WIN32_WINNT 0x0501/#define _WIN32_WINNT 0x0601/' evutil.c && \
+  perl -0777 -pi -e 's/arc4random_addrandom\(\(unsigned char\*\)buf,\s*\n\s*n>\(size_t\)INT_MAX \? INT_MAX : \(int\)n\);/(void)buf; (void)n; \/* arc4random_addrandom not provided by modern glibc; libevent seeds its bundled arc4random from getrandom()\/\/dev\/urandom regardless, see depends\/packages\/libevent.mk *\/\//' evutil_rand.c && \
+  ./autogen.sh
 endef
 
 define $(package)_set_vars

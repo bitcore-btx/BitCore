@@ -392,6 +392,11 @@ class CRegTestParams : public CChainParams {
 public:
     CRegTestParams() {
         strNetworkID = "regtest";
+        // Regtest-only spork signing key so -sporkkey can be used for local
+        // testing. This is a REAL working key pair (regtest only -- matches no
+        // production/mainnet key). The matching private key is NOT stored in the
+        // repo; the regtest test harness supplies it to each node via -sporkkey.
+        strSporkPubKey = "027db66d554469d16bb81682b699076e378a0b5895640b95ddfadcae035f8fdc38";
         consensus.nSubsidyHalvingInterval = 150;
         consensus.nMinimumSubsidy = 10000.00000000 * COIN;
 
